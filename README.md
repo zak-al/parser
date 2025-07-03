@@ -10,8 +10,12 @@ The library provides elementary parsers, referred to as `atoms`. For example, th
 
 It also provides _wrappers_ around parsers. Under the hood, wrappers are nothing more than parsers that have as parameters other parsers. `Ignore` is a wrapper that fails if the wrapped parser fails, and accepts while discarding the resulting abstract syntax tree when the wrapped parser accepts -- this can be used when we want to check whether some pattern is indeed in the input but won't need to process the matched string after parsing.
 
-`Brick`s are another kind of wrappers. They allow to combine arbitrarily many parsers in a versatile way. A brick consist of a list of parsers $(p_1, \mathellipsis, p_n)$ and maps $\{1, \mathellipsis, n\} \to \{1, \mathellipsis, n\}$ that describe what parser to apply next, knowing whether the previous parser accepted or rejected its input.
-These maps can encode composition of parsers, as _when the n-th parser accepts, try the (n+1)th; when any parser fails, reject the input and when the last parser accepts, accept the input_. They can also encode disjunction, as _if the n-th parser fails, try the (n+1)-th; if any parser accepts, accept; if the last parser fails, fail_ and chains of inputs with separators as _if the input parser accepts, try to parse the separator; if the separator accepts, try to parse the input; if the separator fails, accept; and if the input parser fails, reject_.
+`Brick`s are another kind of wrappers. They allow to combine arbitrarily many parsers in a versatile way. A brick consist of a list of parsers and two maps between parsers, `on_success` and `on_failure`, that describe what parser to apply next, knowing whether the previous parser accepted or rejected its input.
+Here are examples of dynamics that bricks can encode:
+* composition: _when the n-th parser accepts, try the (n+1)th; when any parser fails, reject the input and when the last parser accepts, accept the input_;
+* disjunction: _if the n-th parser fails, try the (n+1)-th; if any parser accepts, accept; if the last parser fails, fail_;
+* chains of inputs with separators as _if the input parser accepts, try to parse the separator; if the separator accepts, try to parse the input; if the separator fails, accept; and if the input parser fails, reject_.
+
 These dynamics, along with some others, are built-in: we can just use the corresponding constructor (e.g. `Brick::make_linear` for composition, passing as parameter the list of parsers in the right order). Or we can define a basic brick with a list of parsers and then set for each parser what to do next in case of success and failure.
 
-A formal documentation will come someday, in the meantime I hope the code is sufficiently clear well-commented to understand most details!
+A formal documentation will come someday, in the meantime I hope the code is sufficiently clear and well-commented to understand most details!
