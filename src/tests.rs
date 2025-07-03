@@ -1,9 +1,11 @@
 #[cfg(test)]
 mod tests {
     use crate::atoms::*;
-    use crate::NUMERICS;
     use crate::brick::ParserIndex::{AcceptingState, Index, RejectingState};
     use crate::brick::{Brick, ParserIndex};
+    use crate::{NUMERICS, Parser};
+    use std::collections::HashSet;
+    use std::rc::Rc;
 
     #[test]
     fn test_parse_all_words_from_alphabet() {

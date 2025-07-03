@@ -164,4 +164,3 @@ impl Parser for EndOfInputParser {
         "end_of_input".to_string()
     }
 }
-
