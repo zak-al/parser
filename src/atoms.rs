@@ -1,9 +1,11 @@
 use crate::PropagatedParseError::Atomic;
-use crate::parser::AbstractSyntaxTree::{Ignore, Leaf};
+use crate::parser::AbstractSyntaxTree::Leaf;
 use crate::parser::*;
 use crate::utils::*;
 use std::collections::HashSet;
 use std::rc::Rc;
+use crate::AbstractSyntaxTree::Ignore;
+use crate::atoms::LengthParameter::Length;
 
 pub struct StringParser {
     name: String,
@@ -39,6 +41,15 @@ impl Parser for StringParser {
 
     fn get_name_clone(&self) -> String {
         self.name.clone()
+    }
+}
+
+impl<T: Copy> MessagePassingParser<T> for StringParser {
+    fn parse_with_message<'a>(&self, input: &'a str, parameter: T) -> (ParseResult<'a, AbstractSyntaxTree>, T) {
+        (self.parse(input), parameter)
+    }
+    fn get_name_clone(&self) -> String {
+        Parser::get_name_clone(self)
     }
 }
 
@@ -147,11 +158,79 @@ impl Parser for AllWordsFromAlphabet {
     }
 }
 
+#[derive(Copy, Clone)]
+pub enum LengthParameter {
+    Length(usize),
+    Any
+}
+
+impl MessagePassingParser<LengthParameter> for AllWordsFromAlphabet {
+    fn parse_with_message<'a>(
+        &self,
+        input: &'a str,
+        parameter: LengthParameter,
+    ) -> (ParseResult<'a, AbstractSyntaxTree>, LengthParameter) {
+        match parameter {
+            Length(parameter) => {
+                // We look for the first character not to parse.
+                let end = input
+                    .char_indices()
+                    .position(|(i, x)| i >= parameter || !self.alphabet.contains(&x));
+                //                                 ^ the string must end at index i-1 at most
+                //                                                   ^ the string must not contain
+                //                                                     characters not in self.alphabet.
+                match end {
+                    None => (
+                        // This means that the input contains only characters from the alphabet, but too few.
+                        Err(ParseError::new(
+                            format!(
+                                "Expected string of length {} over {:?} but got input {}.",
+                                parameter, self.alphabet, input
+                            ),
+                            self.name.clone(),
+                            Atomic(input.to_string(), format!("{:*<w$}", input, w=parameter)),
+                        )),
+                        Length(parameter),
+                    ),
+                    Some(end) => {
+                        // This means that input[0..=end-1] is of length at most parameter and contains only characters from self.alphabet.
+                        let (parsed, remaining) = input.split_at(end);
+                        if end == parameter {
+                            (Ok((remaining, Leaf(self.name.clone(), parsed.to_string()))), Length(parameter))
+                        } else {
+                            (Err(ParseError::new(format!("Expected {} characters from {:?} but the longest string from the alphabet is {}, which has length {}", parameter, self.alphabet, parsed, end), self.name.clone(), Atomic(parsed.to_string(), format!("{:*<w$}", parsed, w=parameter)))), Length(parameter))
+                        }
+                    }
+                }
+            },
+            LengthParameter::Any => {
+                match self.parse(input) {
+                    Ok((rem, Leaf(tok, parsed))) => {
+                        let n = parsed.len();
+                        (Ok((rem, Leaf(tok, parsed))), Length(n))
+                    },
+                    Err(err) => {
+                        (Err(err), Length(0))
+                    },
+                    Ok(_) => {
+                        panic!("Internal error. Please report.")
+                    }
+                }
+            }
+        }
+
+    }
+
+    fn get_name_clone(&self) -> String {
+        Parser::get_name_clone(self)
+    }
+}
+
 pub struct EndOfInputParser;
 impl Parser for EndOfInputParser {
     fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, AbstractSyntaxTree> {
         if input.is_empty() {
-            return Ok((input, Ignore));
+            return Ok((input, AbstractSyntaxTree::Ignore));
         }
         Err(ParseError::new(
             format!("Expected end of input but got \"{}\"", input),
@@ -162,5 +241,20 @@ impl Parser for EndOfInputParser {
 
     fn get_name_clone(&self) -> String {
         "end_of_input".to_string()
+    }
+}
+
+
+pub struct MessageTransformer<T: Copy> {
+    transformation: dyn Fn(T) -> T,
+}
+
+impl<T: Copy> MessagePassingParser<T> for MessageTransformer<T> {
+    fn parse_with_message<'a>(&self, input: &'a str, parameter: T) -> (ParseResult<'a, AbstractSyntaxTree>, T) {
+        (Ok((input, Ignore)), (self.transformation)(parameter))
+    }
+
+    fn get_name_clone(&self) -> String {
+        "".to_string()
     }
 }

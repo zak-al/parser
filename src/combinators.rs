@@ -1,4 +1,4 @@
-use crate::{AbstractSyntaxTree, ParseResult, Parser};
+use crate::{AbstractSyntaxTree, MessagePassingParser, ParseResult, Parser};
 use std::rc::Rc;
 
 /// Ignore is a parser that applies the wrapped parser.
@@ -30,4 +30,27 @@ impl Ignore {
             parser,
         }
     }
+}
+
+/// IdentityMessenger is a wrapper around a regular parser that makes it a message-passing parser
+/// that simply takes a parameter of any type and returns it.
+pub struct IdentityMessenger {
+    parser: Rc<dyn Parser>,
+}
+
+impl<T: Copy> MessagePassingParser<T> for IdentityMessenger {
+    fn parse_with_message<'a>(&self, input: &'a str, parameter: T) -> (ParseResult<'a, AbstractSyntaxTree>, T) {
+        (self.parser.parse(input), parameter)
+    }
+
+    fn get_name_clone(&self) -> String {
+        self.parser.get_name_clone()
+    }
+}
+
+/// Converter converts a message-passing parser over type T to one over type U, by applying provided conversion functions.
+pub struct Converter<T: Copy, U: Copy> {
+    parser: Rc<dyn MessagePassingParser<T>>,
+    input_converter: fn(U) -> T,
+    output_converter: fn(U, T) -> U,
 }

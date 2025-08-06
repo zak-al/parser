@@ -2,7 +2,7 @@ use crate::PropagatedParseError::{BecauseSubparserAccepted, BecauseSubparserReje
 use crate::brick::ParserIndex::{AcceptingState, Index, RejectingState};
 use crate::parser::AbstractSyntaxTree::{Branch, Ignore};
 use crate::parser::{AbstractSyntaxTree, Parser};
-use crate::{ParseError, ParseResult, ignore};
+use crate::{ParseError, ParseResult, combinators, MessagePassingParser};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy)]
@@ -117,7 +117,7 @@ impl Brick {
                 on_failure: vec![RejectingState, AcceptingState],
             }
         } else {
-            let trailing_separator = Rc::new(ignore::Ignore::new(Rc::new(Brick::maybe(
+            let trailing_separator = Rc::new(combinators::Ignore::new(Rc::new(Brick::maybe(
                 format!("{}_trailing_separator", name.to_string()),
                 separator.clone(),
             ))));
@@ -184,5 +184,106 @@ impl Parser for Brick {
     }
     fn get_name_clone(&self) -> String {
         self.name.clone()
+    }
+}
+
+/// A message-passing brick extends the concept of a brick, allowing parsers to send messages of
+/// type T to the next.
+pub struct MessagePassingBrick<T: Copy> {
+    name: String,
+    parsers: Vec<Rc<dyn MessagePassingParser<T>>>,
+    pub on_success: Vec<ParserIndex>,
+    pub on_failure: Vec<ParserIndex>,
+}
+
+impl<T: Copy> MessagePassingParser<T> for MessagePassingBrick<T> {
+    fn parse_with_message<'a>(&self, input: &'a str, parameter: T) -> (ParseResult<'a, AbstractSyntaxTree>, T) {
+        // This is mostly a duplicate of the parse method for bricks. The only difference is that we
+        // store the message sent by each parser and send it to the next.
+        let name = self.name.clone();
+        let mut remaining = input;
+        let mut results: Vec<AbstractSyntaxTree> = vec![];
+        let mut i = Index(0);
+        let mut last_parser_index: Option<usize> = None;
+        let mut last_parser_accepted: bool = false;
+        let mut last_failure: Option<ParseError> = None;
+        let mut message: T = parameter;
+        while let Index(j) = i {
+            last_parser_index = Some(j);
+            match self.parsers[j].parse_with_message(remaining, message) {
+                (Ok((rem, res)), msg) => {
+                    remaining = rem;
+                    if res != Ignore {
+                        results.push(res);
+                    }
+                    i = self.on_success[j];
+                    last_parser_accepted = true;
+                    message = msg;
+                }
+                (Err(err), msg) => {
+                    i = self.on_failure[j];
+                    last_parser_accepted = false;
+                    last_failure = Some(err);
+                    message = msg;
+                }
+            }
+        }
+        match i {
+            AcceptingState => (Ok((remaining, Branch(name, results))), message),
+            RejectingState => {
+                let propagation = if last_parser_accepted {
+                    let last_parser_name = self.parsers
+                        [last_parser_index.expect("Internal error. Please report.")]
+                        .get_name_clone();
+                    BecauseSubparserAccepted(
+                        last_parser_name,
+                        results.pop().expect("Internal error. Please report."),
+                    )
+                } else {
+                    BecauseSubparserRejected(Box::new(
+                        last_failure.expect("Internal error. Please report."),
+                    ))
+                };
+                (Err(ParseError::new(
+                    format!(
+                        "Brick failed to parse \"{input}\". Error occurred when trying to parse \"{remaining}\"."
+                    ),
+                    self.name.clone(),
+                    propagation,
+                )), message)
+            }
+            _ => {
+                panic!("Internal error. Please report.")
+            }
+        }
+    }
+
+    fn get_name_clone(&self) -> String {
+        self.name.clone()
+    }
+}
+
+/// If T implements Default, message passing bricks over messages of type T can be converted into regular parsers by passing the default value of T as input message and simply discarding the output messsage.
+impl<T: Copy + Default> Parser for MessagePassingBrick<T> {
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, AbstractSyntaxTree> {
+        let (res, _) = self.parse_with_message(input, Default::default());
+        //                                   ^ output message
+        res
+    }
+
+    fn get_name_clone(&self) -> String {
+        MessagePassingParser::get_name_clone(self)
+    }
+}
+
+impl<T: Copy> MessagePassingBrick<T> {
+    pub fn new<U: ToString>(name: U, parsers: Vec<Rc<dyn MessagePassingParser<T>>>) -> MessagePassingBrick<T> {
+        let n = parsers.len();
+        MessagePassingBrick {
+            name: name.to_string(),
+            parsers,
+            on_success: vec![AcceptingState; n],
+            on_failure: vec![RejectingState; n],
+        }
     }
 }

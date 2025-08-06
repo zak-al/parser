@@ -3,9 +3,11 @@ mod tests {
     use crate::atoms::*;
     use crate::brick::ParserIndex::{AcceptingState, Index, RejectingState};
     use crate::brick::{Brick, ParserIndex};
-    use crate::{NUMERICS, Parser};
+    use crate::{MessagePassingBrick, NUMERICS, Parser};
     use std::collections::HashSet;
     use std::rc::Rc;
+    use crate::combinators::Converter;
+    use crate::LengthParameter::{Any, Length};
 
     #[test]
     fn test_parse_all_words_from_alphabet() {
@@ -136,5 +138,72 @@ mod tests {
         assert!(parser.parse("+12").is_err());
         assert!(parser.parse("-12").is_err());
         assert!(parser.parse("/").is_err());
+    }
+
+    #[test]
+    fn test_indented_blocks() {
+        // An indented block is a message passing brick that passes messages of type (int, int).
+        // The first component of messages is the indentation level and the second is the number of spaces per indentation level (e.g. 2 or 4).
+        // Each line has to contain the string "instruction" or "def instruction", and there must be at least one line.
+        // After "def instruction", we enter a new indented bock with its level incremented by one.
+
+        // In other words, an indented block with parameter (t, k) parses:
+        //  if k != 0 or t = k = 0, t * k spaces; if k = 0 and t > 0,
+        //      any number of spaces and set k to the number of spaces parsed
+        //  a mandatory "instruction" or "def instruction"
+        //  on success of mandatory "def instruction": 0 with parameter (t + 1, k)
+        //  on success of mandatory "instruction", either of:
+        //          | 0 without changing the parameter
+        //          | if t !=, 0 with parameter (t - 1, k)
+        //          | eof
+
+        // parametrised_indentation is parametrised by the expected number of indentations
+        let parametrised_indentation = Rc::new(AllWordsFromAlphabet {
+            name: "indentation".to_string(),
+            alphabet: Rc::new(HashSet::from_iter(" ".chars())), // just space
+            allow_empty_word: true,
+        });
+        
+        fn get_number_of_spaces((indentation_level, number_of_spaces): (usize, LengthParameter)) -> LengthParameter{
+            match number_of_spaces {
+                Length(k) => {Length(indentation_level * k)}
+                LengthParameter::Any => {LengthParameter::Any}
+            }
+        }
+        let parametrised_indentation = Converter {
+            parser: parametrised_indentation,
+            input_converter: get_number_of_spaces,
+            
+        }
+        let parametrised_indentation = Rc::new(parametrised_indentation);
+
+        let instruction = Rc::new(StringParser::new("instruction"));
+        
+        let mut indented_instruction = MessagePassingBrick::new(
+            "indented_instruction",
+            vec![parametrised_indentation.clone(), instruction.clone()],
+        );
+        let indented_instruction = Rc::new(indented_instruction);
+
+        let def_instruction = Rc::new(StringParser::new("def instruction"));
+        let mut indented_def_instruction = MessagePassingBrick::new(
+            "indented_def_instruction",
+            vec![parametrised_indentation.clone(), def_instruction.clone()],
+        );
+        let indented_def_instruction = Rc::new(indented_def_instruction);
+
+        let mut indented_block = MessagePassingBrick::new(
+            "indented_block",
+            vec![
+                indented_instruction.clone(), // mandatory instruction
+                indented_def_instruction.clone(), // mandatory def instruction
+                indented_instruction.clone(), // optional instruction
+                indented_def_instruction.clone(), // optional def instruction
+            ],
+        );
+        indented_block.on_success[0] = Index(0); // After an indented instruction, we stay in the same block.
+        indented_block.on_failure[0] = Index(1); // If a block doesn't start with an indented instruction, it must start with a def instruction.
+        indented_block.on_success[1] = Index(2);
+        indented_block.on_failure[1] = RejectingState;
     }
 }
