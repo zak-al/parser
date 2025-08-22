@@ -48,9 +48,53 @@ impl<T: Copy> MessagePassingParser<T> for IdentityMessenger {
     }
 }
 
+impl IdentityMessenger {
+    pub fn new(parser: Rc<dyn Parser>) -> IdentityMessenger {
+        IdentityMessenger {parser}
+    }
+}
+
 /// Converter converts a message-passing parser over type T to one over type U, by applying provided conversion functions.
 pub struct Converter<T: Copy, U: Copy> {
+    pub(crate) parser: Rc<dyn MessagePassingParser<T>>,
+    pub(crate) input_converter: fn(U) -> T,
+    //                                   ^ parameter sent to the wrapped parser
+    //                             ^ parameter sent to the converted parser
+    pub(crate) output_converter: fn(U, T) -> U,
+}
+
+impl <T: Copy, U: Copy> MessagePassingParser<U> for Converter<T, U> {
+    fn parse_with_message<'a>(&self, input: &'a str, parameter: U) -> (ParseResult<'a, AbstractSyntaxTree>, U) {
+        let (res, msg) = self.parser.parse_with_message(input, (self.input_converter)(parameter));
+        (res, (self.output_converter)(parameter, msg))
+    }
+
+    fn get_name_clone(&self) -> String {
+        self.parser.get_name_clone()
+    }
+}
+
+pub struct SimpleParser<T: Copy> {
     parser: Rc<dyn MessagePassingParser<T>>,
-    input_converter: fn(U) -> T,
-    output_converter: fn(U, T) -> U,
+    default_value: T,
+}
+
+impl<T: Copy> Parser for SimpleParser<T> {
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, AbstractSyntaxTree> {
+        let (res, _) = self.parser.parse_with_message(input, self.default_value);
+        res
+    }
+
+    fn get_name_clone(&self) -> String {
+        self.parser.get_name_clone()
+    }
+}
+
+impl<T: Copy> SimpleParser<T> {
+    fn new(parser: Rc<dyn MessagePassingParser<T>>, default_value: T) -> SimpleParser<T> {
+        SimpleParser {
+            parser,
+            default_value
+        }
+    }
 }

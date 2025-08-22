@@ -187,19 +187,18 @@ impl Parser for Brick {
     }
 }
 
-/// A message-passing brick extends the concept of a brick, allowing parsers to send messages of
-/// type T to the next.
+/// A message-passing brick extends the concept of a brick.
+/// When parser k terminates with message t, the next parser to be called and the parameter with
+/// which it'll be called will be given by on_success(k, t) or on_failure(k, t).
 pub struct MessagePassingBrick<T: Copy> {
-    name: String,
-    parsers: Vec<Rc<dyn MessagePassingParser<T>>>,
-    pub on_success: Vec<ParserIndex>,
-    pub on_failure: Vec<ParserIndex>,
+    pub(crate) name: String,
+    pub(crate) parsers: Vec<Rc<dyn MessagePassingParser<T>>>,
+    pub on_success: fn(usize, T) -> (ParserIndex, T),
+    pub on_failure: fn(usize, T) -> (ParserIndex, T),
 }
 
 impl<T: Copy> MessagePassingParser<T> for MessagePassingBrick<T> {
     fn parse_with_message<'a>(&self, input: &'a str, parameter: T) -> (ParseResult<'a, AbstractSyntaxTree>, T) {
-        // This is mostly a duplicate of the parse method for bricks. The only difference is that we
-        // store the message sent by each parser and send it to the next.
         let name = self.name.clone();
         let mut remaining = input;
         let mut results: Vec<AbstractSyntaxTree> = vec![];
@@ -216,12 +215,12 @@ impl<T: Copy> MessagePassingParser<T> for MessagePassingBrick<T> {
                     if res != Ignore {
                         results.push(res);
                     }
-                    i = self.on_success[j];
+                    (i, message) = (self.on_success)(j, msg);
                     last_parser_accepted = true;
                     message = msg;
                 }
                 (Err(err), msg) => {
-                    i = self.on_failure[j];
+                    (i, message) = (self.on_failure)(j, msg);
                     last_parser_accepted = false;
                     last_failure = Some(err);
                     message = msg;
@@ -273,17 +272,5 @@ impl<T: Copy + Default> Parser for MessagePassingBrick<T> {
 
     fn get_name_clone(&self) -> String {
         MessagePassingParser::get_name_clone(self)
-    }
-}
-
-impl<T: Copy> MessagePassingBrick<T> {
-    pub fn new<U: ToString>(name: U, parsers: Vec<Rc<dyn MessagePassingParser<T>>>) -> MessagePassingBrick<T> {
-        let n = parsers.len();
-        MessagePassingBrick {
-            name: name.to_string(),
-            parsers,
-            on_success: vec![AcceptingState; n],
-            on_failure: vec![RejectingState; n],
-        }
     }
 }

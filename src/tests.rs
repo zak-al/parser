@@ -6,7 +6,7 @@ mod tests {
     use crate::{MessagePassingBrick, NUMERICS, Parser};
     use std::collections::HashSet;
     use std::rc::Rc;
-    use crate::combinators::Converter;
+    use crate::combinators::{Converter, IdentityMessenger, SimpleParser};
     use crate::LengthParameter::{Any, Length};
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_indented_blocks() {
-        // An indented block is a message passing brick that passes messages of type (int, int).
+        // An indented block is a message passing brick that passes messages of type (int, LengthParameter).
         // The first component of messages is the indentation level and the second is the number of spaces per indentation level (e.g. 2 or 4).
         // Each line has to contain the string "instruction" or "def instruction", and there must be at least one line.
         // After "def instruction", we enter a new indented bock with its level incremented by one.
@@ -157,53 +157,125 @@ mod tests {
         //          | if t !=, 0 with parameter (t - 1, k)
         //          | eof
 
-        // parametrised_indentation is parametrised by the expected number of indentations
-        let parametrised_indentation = Rc::new(AllWordsFromAlphabet {
-            name: "indentation".to_string(),
-            alphabet: Rc::new(HashSet::from_iter(" ".chars())), // just space
-            allow_empty_word: true,
-        });
-        
-        fn get_number_of_spaces((indentation_level, number_of_spaces): (usize, LengthParameter)) -> LengthParameter{
-            match number_of_spaces {
-                Length(k) => {Length(indentation_level * k)}
-                LengthParameter::Any => {LengthParameter::Any}
+        fn param_to_number_of_spaces((indentation_level, indentation_length): (usize, LengthParameter)) -> LengthParameter {
+            match indentation_length {
+                Length(k) => {Length(k * indentation_level)},
+                Any => {Any}
             }
         }
-        let parametrised_indentation = Converter {
-            parser: parametrised_indentation,
-            input_converter: get_number_of_spaces,
-            
+        fn number_of_spaces_to_param((expected_indentation_level, expected_indentation_length): (usize, LengthParameter), actual_nspaces: LengthParameter) -> (usize, LengthParameter) {
+            match actual_nspaces {
+                Length(k) => {
+                    match expected_indentation_length {
+                        Length(l) => {
+                            if l != k {
+                                panic!("Internal error! Please report.")
+                            } else {
+                                (expected_indentation_level, actual_nspaces)
+                            }
+                        }
+                        Any => {
+                            (expected_indentation_level, actual_nspaces)
+                        }
+                    }
+                }
+                Any => {
+                    panic!("Internal error! Please report.")
+                }
+            }
         }
-        let parametrised_indentation = Rc::new(parametrised_indentation);
 
-        let instruction = Rc::new(StringParser::new("instruction"));
-        
-        let mut indented_instruction = MessagePassingBrick::new(
-            "indented_instruction",
-            vec![parametrised_indentation.clone(), instruction.clone()],
-        );
-        let indented_instruction = Rc::new(indented_instruction);
+        let indentation = Rc::new(AllWordsFromAlphabet {
+            name: "indentation".to_string(),
+            alphabet: Rc::new(HashSet::from_iter(" ".chars())),
+            allow_empty_word: true,
+        });
 
-        let def_instruction = Rc::new(StringParser::new("def instruction"));
-        let mut indented_def_instruction = MessagePassingBrick::new(
-            "indented_def_instruction",
-            vec![parametrised_indentation.clone(), def_instruction.clone()],
-        );
-        let indented_def_instruction = Rc::new(indented_def_instruction);
+        let instruction_string = Rc::new(StringParser::new("instruction"));
+        let instruction_string = Rc::new(IdentityMessenger::new(instruction_string));
 
-        let mut indented_block = MessagePassingBrick::new(
-            "indented_block",
-            vec![
-                indented_instruction.clone(), // mandatory instruction
-                indented_def_instruction.clone(), // mandatory def instruction
-                indented_instruction.clone(), // optional instruction
-                indented_def_instruction.clone(), // optional def instruction
-            ],
-        );
-        indented_block.on_success[0] = Index(0); // After an indented instruction, we stay in the same block.
-        indented_block.on_failure[0] = Index(1); // If a block doesn't start with an indented instruction, it must start with a def instruction.
-        indented_block.on_success[1] = Index(2);
-        indented_block.on_failure[1] = RejectingState;
+        // simple_instruction takes a parameter (t, k) and tries to parse an associated valid number of spaces followed by the string "instruction"
+        let on_success = |i: usize, msg: LengthParameter| -> (ParserIndex, LengthParameter) {
+            if i == 0 {
+                (ParserIndex::Index(1), msg)
+            } else {
+                (ParserIndex::AcceptingState, msg)
+            }
+        };
+        let on_failure = |i: usize, msg: LengthParameter| -> (ParserIndex, LengthParameter) {
+            (ParserIndex::RejectingState, msg)
+        };
+        let simple_instruction = Rc::new(MessagePassingBrick {
+            name: "SimpleInstruction".to_string(),
+            parsers: vec![indentation.clone(), instruction_string.clone()],
+            on_success,
+            on_failure
+        });
+        let simple_instruction = Rc::new(Converter {
+            parser: simple_instruction,
+            input_converter: param_to_number_of_spaces,
+            output_converter: number_of_spaces_to_param
+        });
+
+        let on_success = |previous_parser: usize, (indentation_level, indentation_length): (usize, LengthParameter)| -> (ParserIndex, (usize, LengthParameter)) {
+            match previous_parser {
+                0 => { // mandatory simple instruction
+                    // After a simple instruction succeeds with output (level, length),
+                    // we try to parse an optional simple instruction on the same indentation level.
+                    (Index(2), (indentation_level, indentation_length))
+                }
+                1 => { // mandatory def instruction
+                    // After parsing a def instruction with output (level, length),
+                    // we must parse a simple or def instruction on the next indentation level.
+                    (Index(0), (indentation_level + 1, indentation_length))
+                }
+                2 => { // optional simple instruction
+                    // After parsing a simple instruction,
+                    // we try to parse another one on the same level.
+                    (Index(2), (indentation_level, indentation_length))
+                }
+                3 => { // optional def instruction
+                    // After parsing a def instruction, we must parse an instruction on the next level.
+                    (Index(0), (indentation_level + 1, indentation_length))
+                }
+                _ => {
+                    panic!("Internal error! Please report.")
+                }
+            }
+        };
+        let on_failure = |previous_parser: usize, (indentation_level, indentation_length): (usize, LengthParameter)| -> (ParserIndex, (usize, LengthParameter)) {
+            match previous_parser {
+                0 => { // mandatory simple instruction
+                    // If we cannot parse a mandatory simple instruction, we may be able to parse a
+                    // def instruction.
+                    (Index(1), (indentation_level, indentation_length))
+                }
+                1 => { // mandatory def instruction
+                    // If we cannot parse a mandatory def instruction, we fail.
+                    // This is because this parser always runs after trying a simple instruction.
+                    (RejectingState, (indentation_level + 1, indentation_length))
+                }
+                2 => { // optional simple instruction
+                    (Index(3), (indentation_level, indentation_length))
+                }
+                3 => { // optional def instruction
+                    // That's fine, it was optional anyway.
+                    (AcceptingState, (indentation_level + 1, indentation_length))
+                }
+                _ => {
+                    panic!("Internal error! Please report.")
+                }
+            }
+        };
+
+        let indented_block = Rc::new(MessagePassingBrick::<(usize, LengthParameter)> {
+            name: "MessagePassingBrick".to_string(),
+            parsers: vec![simple_instruction.clone(), simple_instruction.clone()],
+            on_success,
+            on_failure
+        });
+        let indented_block = Rc::new(SimpleParser::new(indented_block));
+
+        assert!(indented_block.p)
     }
 }
